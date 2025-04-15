@@ -8,11 +8,9 @@ on:
         required: true
         default: 'luci-app-ssr-plus luci-app-openclash'
 
-# 添加权限配置
-permissions:
-  contents: write
-  packages: write
-  issues: write
+# 添加权限配置 - 使用更明确的权限设置
+permissions: 
+  contents: write # 允许创建releases和上传文件
 
 env:
   REPO_URL: https://github.com/openwrt/openwrt.git
@@ -54,14 +52,30 @@ jobs:
       run: |
         cd openwrt
         # 添加插件源
+        echo "添加kenzok8的插件源，包含SSR Plus、PassWall、OpenClash等..."
         echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
         echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default
+        cat feeds.conf.default
 
     - name: Update Feeds
       run: |
         cd openwrt
+        # 更新并安装feeds
+        echo "更新feeds..."
         ./scripts/feeds update -a
+        echo "安装feeds..."
         ./scripts/feeds install -a
+        # 确保关键包能被找到
+        echo "检查关键包是否可用:"
+        for pkg in ${{ github.event.inputs.package_name }}; do
+          if [ -d "package/feeds/kenzo/$pkg" ]; then
+            echo "✓ $pkg 已找到 (kenzo)"
+          elif [ -d "package/feeds/packages/$pkg" ]; then
+            echo "✓ $pkg 已找到 (packages)"
+          else
+            echo "⚠️ 警告: $pkg 未找到"
+          fi
+        done
 
     - name: Generate Minimal Config
       run: |
@@ -182,7 +196,7 @@ jobs:
         allowUpdates: true
         tag: packages-${{ github.run_id }}
         commit: ${{ github.sha }}
-        token: ${{ secrets.RELEASE_TOKEN || github.token }}
+        token: ${{ github.token }}
         body: |
           OpenWrt IPK插件包
           

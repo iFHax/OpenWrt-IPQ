@@ -2,10 +2,14 @@
 # Modify Default IP
 sed -i 's/192.168.1.1/192.168.0.1/g' package/base-files/files/bin/config_generate
 
-# 添加常用插件源
-echo "添加kenzok8的插件源，包含SSR Plus、PassWall、OpenClash等..."
-echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
-echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default
+# 添加常用插件源 - 检查是否已存在，避免重复
+if ! grep -q "kenzo" feeds.conf.default; then
+  echo "添加kenzok8的插件源，包含SSR Plus、PassWall、OpenClash等..."
+  echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
+  echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default
+else
+  echo "kenzo源已存在，跳过添加..."
+fi
 
 # 添加对IPQ53xx的支持
 if [ ! -d "target/linux/qualcommax" ]; then

@@ -3,11 +3,9 @@ name: Build
 on:
   workflow_dispatch:
 
-# 添加权限配置
-permissions:
-  contents: write
-  packages: write
-  issues: write
+# 添加更明确的权限配置
+permissions: 
+  contents: write # 允许创建releases和上传文件
 
 env:
   REPO_URL: https://github.com/openwrt/openwrt.git
@@ -85,33 +83,28 @@ jobs:
     - name: Install Feeds
       run: |
         cd openwrt
-        # 更新官方feeds
-        ./scripts/feeds update -a
-        # 更新feeds.conf.default (来自diy-part.sh)
+        # 先执行DIY脚本，添加自定义源
+        echo "执行DIY脚本，添加自定义源..."
         $GITHUB_WORKSPACE/$DIY_SCRIPT
-        # 再次更新feeds以包含新添加的源
+        # 然后更新并安装feeds
+        echo "更新feeds..."
         ./scripts/feeds update -a
-        # 安装所有包
+        echo "安装feeds..."
         ./scripts/feeds install -a
-        # 强制重新安装可能冲突的包
-        ./scripts/feeds uninstall -a luci-app-ssr-plus luci-app-passwall luci-app-openclash
-        ./scripts/feeds install -p kenzo luci-app-ssr-plus luci-app-passwall luci-app-openclash
-        ./scripts/feeds install -a
+        # 强制安装关键包
+        echo "安装特定包..."
+        ./scripts/feeds install -a -f -p kenzo luci-app-ssr-plus luci-app-passwall luci-app-openclash
 
     - name: Custom Config
       run: |
         [ -e files ] && mv files openwrt/files
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-        chmod +x $DIY_SCRIPT
-        ls -la $DIY_SCRIPT  # 确认权限已修改
+        # DIY脚本已经在前面执行过了，无需再次执行
         cd openwrt
-        $GITHUB_WORKSPACE/$DIY_SCRIPT || {
-          echo "执行DIY脚本失败，检查错误..."
-          cat $GITHUB_WORKSPACE/$DIY_SCRIPT
-          echo "尝试在当前目录执行..."
-          cp $GITHUB_WORKSPACE/$DIY_SCRIPT ./
-          chmod +x ./$DIY_SCRIPT
-          ./$DIY_SCRIPT
+        make defconfig || {
+          echo "make defconfig失败，尝试恢复.config文件..."
+          [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE ./.config
+          make defconfig
         }
 
     - name: Download DL
@@ -224,7 +217,7 @@ jobs:
         allowUpdates: true
         tag: ${{ steps.tag.outputs.release_tag || github.run_id }}
         commit: ${{ github.sha }}
-        token: ${{ secrets.RELEASE_TOKEN || github.token }}
+        token: ${{ github.token }}
         body: |
           GL.iNet BE3600 (IPQ5312) OpenWrt固件
           构建时间: ${{ env.FILE_DATE }}
