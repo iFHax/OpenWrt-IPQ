@@ -93,3 +93,51 @@
 * 5G WiSoC: QCN6402, FEM: x2
 * 2.4G FEM: x2
 * 2.5G PHY: YT8821C
+
+## 编译指南
+
+### 自动编译
+
+本项目使用GitHub Actions自动构建固件。要触发构建，可以：
+
+1. 进入GitHub仓库的Actions标签页
+2. 选择"Build"工作流
+3. 点击"Run workflow"按钮
+4. 等待构建完成，可在Releases页面下载固件
+
+### 本地编译
+
+如果需要在本地环境编译，可以按照以下步骤操作：
+
+```bash
+# 克隆OpenWrt代码库
+git clone https://github.com/openwrt/openwrt.git
+cd openwrt
+
+# 下载本项目的自定义配置
+git clone https://github.com/aimuch/OpenWrt-IPQ.git config
+cp -r config/files ./
+cp config/.config ./
+cp config/diy-part.sh ./
+
+# 更新并安装feeds
+./scripts/feeds update -a
+./scripts/feeds install -a
+
+# 运行自定义脚本
+chmod +x diy-part.sh
+./diy-part.sh
+
+# 开始编译
+make defconfig
+make -j$(nproc)
+```
+
+编译完成后，固件将位于 `bin/targets/` 目录下。
+
+### 支持的设备
+
+目前主要支持以下设备：
+- GL.iNet BE3600 (基于IPQ5312)
+
+未来可能会添加更多设备支持。

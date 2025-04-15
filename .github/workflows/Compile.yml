@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 env:
-  REPO_URL: https://github.com/Lvellios/openwrt-lede
+  REPO_URL: https://github.com/openwrt/openwrt.git
   REPO_BRANCH: master
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
@@ -41,6 +41,16 @@ jobs:
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
         df -Th
+
+    - name: Cache OpenWrt
+      uses: actions/cache@v3
+      with:
+        path: |
+          /workdir/openwrt/dl
+          /workdir/openwrt/build_dir/host
+        key: openwrt-${{ runner.os }}-${{ hashFiles('.config') }}
+        restore-keys: |
+          openwrt-${{ runner.os }}
 
     - name: CGit Repository
       working-directory: /workdir
@@ -87,13 +97,6 @@ jobs:
       if: (!cancelled())
       run: df -hT
 
-#    - name: Upload Bin Directory
-#      uses: actions/upload-artifact@main
-#      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-#      with:
-#        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-#        path: openwrt/bin
-
     - name: Organize Files
       id: organize
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
@@ -102,6 +105,7 @@ jobs:
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
+      continue-on-error: true  # 添加错误容忍，防止目录不存在导致整个工作流失败
 
     - name: Upload Artifact
       uses: actions/upload-artifact@main
@@ -118,6 +122,7 @@ jobs:
     - name: Upload Files
       id: release
       uses: ncipollo/release-action@v1
+      if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
         name: ${{ env.FILE_NAME }}
         allowUpdates: true
@@ -125,6 +130,16 @@ jobs:
         commit: main
         token: ${{ secrets.RELEASES_TOKEN }}
         body: |
-          The firmware for IPQ53xx-BE3600
-          ${{ env.useVersionInfo }}
+          GL.iNet BE3600 (IPQ5312) OpenWrt固件
+          构建时间: ${{ env.FILE_DATE }}
+          
+          ### 硬件规格
+          - CPU: IPQ5312 (4核A53@1.1GHz, 1 NPU@1.0GHz)
+          - RAM: 256MB
+          - Flash: 128MB
+          
+          ### 特性支持
+          - Wi-Fi: 2.4GHz + 5GHz
+          - 有线网络: 5个千兆端口
+          - 2.5G PHY: YT8821C
         artifacts: ${{ env.FIRMWARE }}/*
