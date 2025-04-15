@@ -44,6 +44,8 @@ jobs:
         sudo -E apt-get -y autoremove --purge
         sudo -E apt-get clean
         sudo timedatectl set-timezone "$TZ"
+        # 清理并重建工作目录
+        sudo rm -rf /workdir
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
         df -Th
@@ -57,11 +59,17 @@ jobs:
         key: openwrt-${{ runner.os }}-${{ hashFiles('.config') }}
         restore-keys: |
           openwrt-${{ runner.os }}
+      continue-on-error: true
 
     - name: CGit Repository
       working-directory: /workdir
       run: |
         df -hT $PWD
+        # 清理已存在的目录
+        if [ -d "openwrt" ]; then
+          echo "发现已存在的openwrt目录，正在清理..."
+          rm -rf openwrt
+        fi
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
