@@ -191,4 +191,5 @@ jobs:
           
           注意: 如果只发现build_failed.txt文件，说明编译过程未能生成IPK包。请查看工作流日志了解详细错误信息。
         artifacts: ${{ env.packages_path }}/*
+        artifactErrorsFailBuild: false
       continue-on-error: true 
