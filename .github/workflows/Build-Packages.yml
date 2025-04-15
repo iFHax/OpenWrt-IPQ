@@ -104,15 +104,28 @@ jobs:
         cd openwrt
         echo "开始编译指定的插件包..."
         
+        # 确保所有依赖都已安装
+        make defconfig
+        
+        # 编译基本工具链
+        echo "编译基础工具链..."
+        make tools/compile -j$(nproc) || make tools/compile -j1 V=s
+        make toolchain/compile -j$(nproc) || make toolchain/compile -j1 V=s
+        
         # 编译所有输入的包
         for pkg in ${{ github.event.inputs.package_name }}; do
           echo "编译 $pkg..."
-          make package/$pkg/compile -j$(nproc) V=s
+          make package/$pkg/compile -j$(nproc) V=s || {
+            echo "标准编译失败，尝试使用单线程编译..."
+            make package/$pkg/compile -j1 V=s
+          }
         done
         
-        echo "编译SDK工具链..."
-        make tools/compile -j$(nproc)
-        make toolchain/compile -j$(nproc)
+        # 尝试安装软件包
+        for pkg in ${{ github.event.inputs.package_name }}; do
+          echo "安装 $pkg..."
+          make package/$pkg/install -j$(nproc) || true
+        done
         
         echo "status=success" >> $GITHUB_OUTPUT
       continue-on-error: true
@@ -122,11 +135,31 @@ jobs:
       run: |
         mkdir -p ./ipk_packages
         
-        # 收集所有编译好的ipk文件
-        find openwrt/bin/packages/ -name "*.ipk" -exec cp {} ./ipk_packages/ \;
-        find openwrt/bin/targets/ -name "*.ipk" -exec cp {} ./ipk_packages/ \;
+        echo "查看编译输出目录结构..."
+        find openwrt/bin -type d | sort || echo "bin目录不存在"
         
-        echo "找到以下IPK包:"
+        # 收集所有编译好的ipk文件
+        if [ -d "openwrt/bin/packages" ]; then
+          echo "复制packages目录下的IPK文件..."
+          find openwrt/bin/packages -name "*.ipk" -exec cp {} ./ipk_packages/ \; || echo "没有找到包文件"
+        else
+          echo "packages目录不存在"
+        fi
+        
+        if [ -d "openwrt/bin/targets" ]; then
+          echo "复制targets目录下的IPK文件..."
+          find openwrt/bin/targets -name "*.ipk" -exec cp {} ./ipk_packages/ \; || echo "没有找到目标包文件"
+        else
+          echo "targets目录不存在"
+        fi
+        
+        # 确保总有文件可以上传
+        if [ ! "$(ls -A ./ipk_packages 2>/dev/null)" ]; then
+          echo "未找到任何IPK文件，创建占位文件..."
+          echo "No packages were built. Please check build logs for errors." > ./ipk_packages/build_failed.txt
+        fi
+        
+        echo "找到以下IPK包或文件:"
         ls -la ./ipk_packages/
         
         echo "packages_path=$(pwd)/ipk_packages" >> $GITHUB_ENV
@@ -138,7 +171,7 @@ jobs:
       if: steps.collect.outputs.status == 'success' && !cancelled()
       with:
         name: OpenWrt_packages_${{ github.event.inputs.package_name }}_${{ github.run_id }}
-        path: ${{ env.packages_path }}/*.ipk
+        path: ${{ env.packages_path }}
 
     - name: Create Release
       id: create_release
@@ -155,5 +188,7 @@ jobs:
           
           编译的插件: ${{ github.event.inputs.package_name }}
           构建时间: ${{ env.TZ }} - ${{ github.event.repository.updated_at }}
-        artifacts: ${{ env.packages_path }}/*.ipk
+          
+          注意: 如果只发现build_failed.txt文件，说明编译过程未能生成IPK包。请查看工作流日志了解详细错误信息。
+        artifacts: ${{ env.packages_path }}/*
       continue-on-error: true 

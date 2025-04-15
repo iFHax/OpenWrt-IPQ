@@ -94,8 +94,16 @@ jobs:
         [ -e files ] && mv files openwrt/files
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
         chmod +x $DIY_SCRIPT
+        ls -la $DIY_SCRIPT  # 确认权限已修改
         cd openwrt
-        $GITHUB_WORKSPACE/$DIY_SCRIPT
+        $GITHUB_WORKSPACE/$DIY_SCRIPT || {
+          echo "执行DIY脚本失败，检查错误..."
+          cat $GITHUB_WORKSPACE/$DIY_SCRIPT
+          echo "尝试在当前目录执行..."
+          cp $GITHUB_WORKSPACE/$DIY_SCRIPT ./
+          chmod +x ./$DIY_SCRIPT
+          ./$DIY_SCRIPT
+        }
 
     - name: Download DL
       id: package
