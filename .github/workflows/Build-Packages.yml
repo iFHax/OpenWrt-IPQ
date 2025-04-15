@@ -1,0 +1,159 @@
+name: Build IPK Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: '要编译的插件名称(多个插件用空格分隔)'
+        required: true
+        default: 'luci-app-ssr-plus luci-app-openclash'
+
+# 添加权限配置
+permissions:
+  contents: write
+  packages: write
+  issues: write
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt.git
+  REPO_BRANCH: master
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@main
+
+    - name: INIT Environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /etc/mysql /etc/php /opt/ghc /usr/local/lib/android 2>/dev/null
+        sudo -E apt-get -y update
+        sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
+        sudo -E apt-get -y install rename time gn
+        sudo -E apt-get -y autoremove --purge
+        sudo -E apt-get clean
+        sudo timedatectl set-timezone "$TZ"
+        # 清理并重建工作目录
+        sudo rm -rf /workdir
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+        df -Th
+
+    - name: Clone Source Code
+      working-directory: /workdir
+      run: |
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    - name: Add Custom Feeds
+      run: |
+        cd openwrt
+        # 添加插件源
+        echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
+        echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default
+
+    - name: Update Feeds
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Generate Minimal Config
+      run: |
+        cd openwrt
+        cat > .config <<EOF
+        CONFIG_MODULES=y
+        CONFIG_HAVE_DOT_CONFIG=y
+        CONFIG_TARGET_ipq53xx=y
+        CONFIG_TARGET_ipq53xx_generic=y
+        CONFIG_TARGET_ipq53xx_generic_DEVICE_glinet_gl-be3600=y
+        CONFIG_HAS_SUBTARGETS=y
+        CONFIG_HAS_DEVICES=y
+        CONFIG_TARGET_BOARD="ipq53xx"
+        CONFIG_TARGET_SUBTARGET="generic"
+        CONFIG_TARGET_PROFILE="DEVICE_glinet_gl-be3600"
+        CONFIG_TARGET_ARCH_PACKAGES="aarch64_cortex-a53"
+        CONFIG_DEFAULT_TARGET_OPTIMIZATION="-Os -pipe -mcpu=cortex-a53"
+        CONFIG_CPU_TYPE="cortex-a53"
+        CONFIG_SDK=y
+        CONFIG_MAKE_TOOLCHAIN=y
+        EOF
+        
+        # 添加用户指定的包
+        for pkg in ${{ github.event.inputs.package_name }}; do
+          echo "CONFIG_PACKAGE_$pkg=y" >> .config
+        done
+        
+        make defconfig
+
+    - name: Download Package Sources
+      run: |
+        cd openwrt
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Build Packages
+      id: compile
+      run: |
+        cd openwrt
+        echo "开始编译指定的插件包..."
+        
+        # 编译所有输入的包
+        for pkg in ${{ github.event.inputs.package_name }}; do
+          echo "编译 $pkg..."
+          make package/$pkg/compile -j$(nproc) V=s
+        done
+        
+        echo "编译SDK工具链..."
+        make tools/compile -j$(nproc)
+        make toolchain/compile -j$(nproc)
+        
+        echo "status=success" >> $GITHUB_OUTPUT
+      continue-on-error: true
+
+    - name: Collect IPK Packages
+      id: collect
+      run: |
+        mkdir -p ./ipk_packages
+        
+        # 收集所有编译好的ipk文件
+        find openwrt/bin/packages/ -name "*.ipk" -exec cp {} ./ipk_packages/ \;
+        find openwrt/bin/targets/ -name "*.ipk" -exec cp {} ./ipk_packages/ \;
+        
+        echo "找到以下IPK包:"
+        ls -la ./ipk_packages/
+        
+        echo "packages_path=$(pwd)/ipk_packages" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+      continue-on-error: true
+
+    - name: Upload IPK Packages
+      uses: actions/upload-artifact@main
+      if: steps.collect.outputs.status == 'success' && !cancelled()
+      with:
+        name: OpenWrt_packages_${{ github.event.inputs.package_name }}_${{ github.run_id }}
+        path: ${{ env.packages_path }}/*.ipk
+
+    - name: Create Release
+      id: create_release
+      uses: ncipollo/release-action@v1
+      if: steps.collect.outputs.status == 'success' && !cancelled()
+      with:
+        name: IPK Packages - ${{ github.event.inputs.package_name }}
+        allowUpdates: true
+        tag: packages-${{ github.run_id }}
+        commit: ${{ github.sha }}
+        token: ${{ github.token }}
+        body: |
+          OpenWrt IPK插件包
+          
+          编译的插件: ${{ github.event.inputs.package_name }}
+          构建时间: ${{ env.TZ }} - ${{ github.event.repository.updated_at }}
+        artifacts: ${{ env.packages_path }}/*.ipk
+      continue-on-error: true 

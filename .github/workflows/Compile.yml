@@ -76,7 +76,17 @@ jobs:
     - name: Install Feeds
       run: |
         cd openwrt
+        # 更新官方feeds
         ./scripts/feeds update -a
+        # 更新feeds.conf.default (来自diy-part.sh)
+        $GITHUB_WORKSPACE/$DIY_SCRIPT
+        # 再次更新feeds以包含新添加的源
+        ./scripts/feeds update -a
+        # 安装所有包
+        ./scripts/feeds install -a
+        # 强制重新安装可能冲突的包
+        ./scripts/feeds uninstall -a luci-app-ssr-plus luci-app-passwall luci-app-openclash
+        ./scripts/feeds install -p kenzo luci-app-ssr-plus luci-app-passwall luci-app-openclash
         ./scripts/feeds install -a
 
     - name: Custom Config
