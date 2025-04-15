@@ -138,32 +138,39 @@ jobs:
         ls -la openwrt || echo "openwrt目录不存在"
         ls -la openwrt/bin || echo "bin目录不存在"
         echo "查找所有可能的固件文件:"
-        find . -name "*.bin" -o -name "*.img" -o -name "*.gz" | grep -v "build_dir"
+        find . -name "*.bin" -o -name "*.img" -o -name "*.gz" 2>/dev/null | grep -v "build_dir" || echo "未找到任何固件文件"
+      continue-on-error: true
 
     - name: Organize Files
       id: organize
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
+        echo "===== 开始整理固件文件 ====="
         mkdir -p output
         # 尝试找到任何生成的固件文件
         if [ -d "openwrt/bin" ]; then
-          echo "找到bin目录，复制内容到输出目录"
+          echo "√ 找到bin目录，复制内容到输出目录"
           mkdir -p output/bin
-          cp -r openwrt/bin output/ || echo "复制bin目录失败"
+          cp -r openwrt/bin output/ || echo "! 复制bin目录失败"
+          echo "√ 成功复制内容到output/bin/"
+        else
+          echo "! openwrt/bin目录不存在"
         fi
         
         # 确保有文件可供发布
         if [ ! "$(find output -type f 2>/dev/null)" ]; then
-          echo "未找到任何固件文件，创建dummy文件"
+          echo "! 未找到任何固件文件，创建dummy文件"
           mkdir -p output/dummy
           echo "This is a placeholder file. No firmware was built successfully." > output/dummy/placeholder.txt
+          echo "√ 创建了占位文件output/dummy/placeholder.txt"
         fi
         
-        echo "output目录内容:"
-        find output -type f | sort
+        echo "===== 输出目录内容 ====="
+        find output -type f | sort || echo "! 输出目录没有任何文件"
         
         echo "FIRMWARE=$(pwd)/output" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
+        echo "===== 文件整理完成 ====="
       continue-on-error: true
 
     - name: Upload Artifact
@@ -176,7 +183,10 @@ jobs:
     - name: Push Tag
       id: tag
       run: |
-        echo "release_tag=$(date +"%Y%m%d%H%M")" >> $GITHUB_OUTPUT
+        TIME=$(date +"%Y%m%d%H%M")
+        echo "release_tag=$TIME" >> $GITHUB_OUTPUT
+        echo "生成的TAG: $TIME"
+      continue-on-error: true
 
     - name: Upload Files
       id: release
@@ -185,8 +195,8 @@ jobs:
       with:
         name: ${{ env.FILE_NAME }}
         allowUpdates: true
-        tag: ${{ steps.tag.outputs.release_tag }}
-        commit: main
+        tag: ${{ steps.tag.outputs.release_tag || github.run_id }}
+        commit: ${{ github.sha }}
         token: ${{ github.token }}
         body: |
           GL.iNet BE3600 (IPQ5312) OpenWrt固件
