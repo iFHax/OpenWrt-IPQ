@@ -5,6 +5,11 @@ on:
   schedule:
     - cron: 3 2 12 * *
 
+# 添加权限配置
+permissions:
+  contents: write
+  actions: write
+
 jobs:
   del_runs:
     runs-on: ubuntu-22.04

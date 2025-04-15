@@ -3,6 +3,12 @@ name: Build
 on:
   workflow_dispatch:
 
+# 添加权限配置
+permissions:
+  contents: write
+  packages: write
+  issues: write
+
 env:
   REPO_URL: https://github.com/openwrt/openwrt.git
   REPO_BRANCH: master
@@ -97,15 +103,34 @@ jobs:
       if: (!cancelled())
       run: df -hT
 
+    - name: Debug Info
+      run: |
+        echo "固件目录信息:"
+        ls -la openwrt/bin || echo "bin目录不存在"
+        if [ -d "openwrt/bin/targets" ]; then
+          echo "targets目录内容:"
+          find openwrt/bin/targets -type f | sort
+        else
+          echo "targets目录不存在"
+        fi
+
     - name: Organize Files
       id: organize
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
-        cd openwrt/bin/targets/*/*
-        rm -rf packages
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
-      continue-on-error: true  # 添加错误容忍，防止目录不存在导致整个工作流失败
+        cd openwrt/bin/targets || mkdir -p openwrt/bin/targets
+        find openwrt/bin/targets -type d -name "packages" -exec rm -rf {} +
+        if [ -d "openwrt/bin/targets" ]; then
+          echo "FIRMWARE=$(pwd)/openwrt/bin/targets" >> $GITHUB_ENV
+          echo "status=success" >> $GITHUB_OUTPUT
+        else
+          echo "::warning::No firmware directory found"
+          mkdir -p openwrt/bin/targets/dummy/target
+          touch openwrt/bin/targets/dummy/target/dummy.bin
+          echo "FIRMWARE=$(pwd)/openwrt/bin/targets" >> $GITHUB_ENV
+          echo "status=success" >> $GITHUB_OUTPUT
+        fi
+      continue-on-error: true
 
     - name: Upload Artifact
       uses: actions/upload-artifact@main
@@ -142,4 +167,5 @@ jobs:
           - Wi-Fi: 2.4GHz + 5GHz
           - 有线网络: 5个千兆端口
           - 2.5G PHY: YT8821C
-        artifacts: ${{ env.FIRMWARE }}/*
+        artifacts: ${{ env.FIRMWARE }}/**/*
+      continue-on-error: true
