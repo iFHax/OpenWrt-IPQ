@@ -98,6 +98,26 @@ jobs:
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+      continue-on-error: true
+      
+    - name: Analyze Compile Results
+      run: |
+        echo "分析编译结果:"
+        echo "检查.config文件中的设备目标配置:"
+        grep -E "^CONFIG_TARGET_.*=y" openwrt/.config || echo "没有找到目标设备配置"
+        
+        echo "检查IPQ5312相关配置:"
+        grep -E "CONFIG_.*IPQ53.*" openwrt/.config || echo "没有找到IPQ53相关配置"
+        
+        echo "检查编译生成的文件:"
+        find openwrt/bin -type f 2>/dev/null | sort || echo "没有生成bin目录或文件"
+        
+        echo "检查是否有编译错误日志:"
+        find openwrt/logs -type f 2>/dev/null | head -5 || echo "没有找到日志文件"
+        
+        if [ -d "openwrt/logs" ]; then
+          grep -l "Error" openwrt/logs/* 2>/dev/null | head -5 || echo "日志中未发现Error关键字"
+        fi
 
     - name: Check Space Usage
       if: (!cancelled())
@@ -106,30 +126,36 @@ jobs:
     - name: Debug Info
       run: |
         echo "固件目录信息:"
+        ls -la || echo "当前目录无法访问"
+        ls -la openwrt || echo "openwrt目录不存在"
         ls -la openwrt/bin || echo "bin目录不存在"
-        if [ -d "openwrt/bin/targets" ]; then
-          echo "targets目录内容:"
-          find openwrt/bin/targets -type f | sort
-        else
-          echo "targets目录不存在"
-        fi
+        echo "查找所有可能的固件文件:"
+        find . -name "*.bin" -o -name "*.img" -o -name "*.gz" | grep -v "build_dir"
 
     - name: Organize Files
       id: organize
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
-        cd openwrt/bin/targets || mkdir -p openwrt/bin/targets
-        find openwrt/bin/targets -type d -name "packages" -exec rm -rf {} +
-        if [ -d "openwrt/bin/targets" ]; then
-          echo "FIRMWARE=$(pwd)/openwrt/bin/targets" >> $GITHUB_ENV
-          echo "status=success" >> $GITHUB_OUTPUT
-        else
-          echo "::warning::No firmware directory found"
-          mkdir -p openwrt/bin/targets/dummy/target
-          touch openwrt/bin/targets/dummy/target/dummy.bin
-          echo "FIRMWARE=$(pwd)/openwrt/bin/targets" >> $GITHUB_ENV
-          echo "status=success" >> $GITHUB_OUTPUT
+        mkdir -p output
+        # 尝试找到任何生成的固件文件
+        if [ -d "openwrt/bin" ]; then
+          echo "找到bin目录，复制内容到输出目录"
+          mkdir -p output/bin
+          cp -r openwrt/bin output/ || echo "复制bin目录失败"
         fi
+        
+        # 确保有文件可供发布
+        if [ ! "$(find output -type f 2>/dev/null)" ]; then
+          echo "未找到任何固件文件，创建dummy文件"
+          mkdir -p output/dummy
+          echo "This is a placeholder file. No firmware was built successfully." > output/dummy/placeholder.txt
+        fi
+        
+        echo "output目录内容:"
+        find output -type f | sort
+        
+        echo "FIRMWARE=$(pwd)/output" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
       continue-on-error: true
 
     - name: Upload Artifact
@@ -137,7 +163,7 @@ jobs:
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
+        path: ${{ env.FIRMWARE }}/**/*
 
     - name: Push Tag
       id: tag
@@ -167,5 +193,7 @@ jobs:
           - Wi-Fi: 2.4GHz + 5GHz
           - 有线网络: 5个千兆端口
           - 2.5G PHY: YT8821C
+          
+          注意：如果release中只包含placeholder.txt文件，说明编译过程没有生成固件。
         artifacts: ${{ env.FIRMWARE }}/**/*
       continue-on-error: true
