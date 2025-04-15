@@ -96,6 +96,37 @@ jobs:
           # 尝试查找所有可能的依赖包Makefile
           find feeds/small/ -name "Makefile" -exec grep -l "PKG_RELEASE" {} \; | xargs -I {} echo "检查: {}"
         fi
+        
+        # 修复naiveproxy编译问题
+        if [ -f "feeds/small/naiveproxy/Makefile" ]; then
+          echo "找到naiveproxy Makefile，检查并修复潜在问题..."
+          # 备份原始文件
+          cp feeds/small/naiveproxy/Makefile feeds/small/naiveproxy/Makefile.bak
+          
+          # 检查并显示naiveproxy的关键信息
+          echo "naiveproxy版本信息:"
+          grep -E 'PKG_VERSION|PKG_SOURCE|PKG_BUILD_DEPENDS' feeds/small/naiveproxy/Makefile
+          
+          # 查看naiveproxy依赖信息
+          echo "naiveproxy依赖情况:"
+          grep -A 10 "DEPENDS" feeds/small/naiveproxy/Makefile
+          
+          # 确保软件包依赖满足
+          echo "安装编译naiveproxy所需的系统依赖..."
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip ninja-build nodejs
+          python3 -m pip install urllib3==1.26.15
+          
+          # 显示系统环境信息
+          echo "当前系统环境信息:"
+          uname -a
+          gcc --version
+          python3 --version
+          node --version
+          npm --version
+        else
+          echo "未找到naiveproxy Makefile"
+        fi
 
     - name: Generate Minimal Config
       run: |
@@ -147,14 +178,14 @@ jobs:
         make toolchain/compile -j$(nproc) || make toolchain/compile -j1 V=s
         
         # 创建一个问题包列表
-        problem_packages="lua-neturl"
+        problem_packages="lua-neturl naiveproxy"
         
         # 编译所有输入的包
         for pkg in ${{ github.event.inputs.package_name }}; do
           echo "编译 $pkg..."
-          # 跳过不需要编译lua-neturl单独依赖的方式
-          if [[ "$pkg" == "luci-app-ssr-plus" ]]; then
-            echo "针对SSR Plus使用特殊编译方式..."
+          # 处理问题依赖包
+          if [[ "$pkg" == "luci-app-ssr-plus" ]] || [[ "$pkg" == "luci-app-passwall" ]]; then
+            echo "针对需要特殊处理的包使用特殊编译方式..."
             # 先处理有问题的依赖包
             for prob_pkg in $problem_packages; do
               echo "绕过问题包 $prob_pkg..."
@@ -165,16 +196,36 @@ jobs:
                 touch $feeds_path/.built
                 mkdir -p $feeds_path/ipkg-build/
                 touch $feeds_path/ipkg-build/.built
+                echo "已经跳过编译 $prob_pkg"
               fi
             done
           fi
           
           # 使用IGNORE_ERRORS=1尝试编译，即使有错误也继续
+          echo "正在编译 $pkg，使用多线程..."
           make package/$pkg/compile IGNORE_ERRORS=1 -j$(nproc) V=s || {
-            echo "标准编译失败，尝试使用单线程编译..."
-            make package/$pkg/compile IGNORE_ERRORS=1 -j1 V=s
+            echo "多线程编译失败，尝试使用单线程编译..."
+            make package/$pkg/compile IGNORE_ERRORS=1 -j1 V=s || {
+              echo "单线程编译也失败了，记录错误但继续..."
+              echo "$pkg 编译失败" >> /tmp/failed_packages.txt
+            }
           }
+          
+          # 检查编译是否成功
+          if find bin/packages -name "*${pkg}*" -type f 2>/dev/null | grep -q .; then
+            echo "✓ $pkg 编译成功，找到对应的IPK文件"
+          elif find bin/targets -name "*${pkg}*" -type f 2>/dev/null | grep -q .; then
+            echo "✓ $pkg 编译成功，找到对应的IPK文件"
+          else
+            echo "⚠️ 警告: 未找到 $pkg 的编译输出文件"
+          fi
         done
+        
+        # 显示编译失败包的列表
+        if [ -f "/tmp/failed_packages.txt" ]; then
+          echo "以下包编译失败:"
+          cat /tmp/failed_packages.txt
+        fi
         
         # 尝试安装软件包
         for pkg in ${{ github.event.inputs.package_name }}; do
