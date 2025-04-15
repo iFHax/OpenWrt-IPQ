@@ -207,7 +207,7 @@ jobs:
         allowUpdates: true
         tag: ${{ steps.tag.outputs.release_tag || github.run_id }}
         commit: ${{ github.sha }}
-        token: ${{ github.token }}
+        token: ${{ secrets.RELEASE_TOKEN || github.token }}
         body: |
           GL.iNet BE3600 (IPQ5312) OpenWrt固件
           构建时间: ${{ env.FILE_DATE }}
