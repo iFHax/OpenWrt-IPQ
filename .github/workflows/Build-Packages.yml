@@ -8,9 +8,12 @@ on:
         required: true
         default: 'luci-app-ssr-plus luci-app-openclash'
 
-# 添加权限配置 - 使用更明确的权限设置
+# 修改权限配置，确保有足够的权限创建发布
 permissions: 
-  contents: write # 允许创建releases和上传文件
+  contents: write  # 允许创建releases和上传文件
+  packages: read
+  issues: read
+  pull-requests: read
 
 env:
   REPO_URL: https://github.com/openwrt/openwrt.git
@@ -288,7 +291,7 @@ jobs:
         allowUpdates: true
         tag: packages-${{ github.run_id }}
         commit: ${{ github.sha }}
-        token: ${{ github.token }}
+        token: ${{ secrets.GITHUB_TOKEN }}
         body: |
           OpenWrt IPK插件包
           

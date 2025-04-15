@@ -1,0 +1,256 @@
+name: Build OpenWrt Firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        description: '设备型号'
+        required: true
+        default: 'gl-be3600'
+      build_type:
+        description: '构建类型 (正式版/开发版)'
+        required: true
+        default: '正式版'
+        type: choice
+        options:
+          - 正式版
+          - 开发版
+
+# 权限配置
+permissions: 
+  contents: write  # 允许创建releases和上传文件
+  packages: read
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt.git
+  REPO_BRANCH: master
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@main
+
+    - name: INIT Environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /etc/mysql /etc/php /opt/ghc /usr/local/lib/android 2>/dev/null
+        sudo -E apt-get -y update
+        sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
+        sudo -E apt-get -y install rename time gn
+        sudo -E apt-get -y autoremove --purge
+        sudo -E apt-get clean
+        sudo timedatectl set-timezone "$TZ"
+        # 清理并重建工作目录
+        sudo rm -rf /workdir
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+        df -Th
+
+    - name: Clone Source Code
+      working-directory: /workdir
+      run: |
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        cd openwrt
+        echo "OPENWRT_ROOT=$PWD" >> $GITHUB_ENV
+        echo "构建OpenWrt源码版本: $(git describe --tags)"
+
+    - name: Add Custom Feeds
+      run: |
+        cd openwrt
+        # 添加插件源
+        echo "添加kenzok8的插件源，包含SSR Plus、PassWall、OpenClash等..."
+        echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
+        echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default
+        cat feeds.conf.default
+
+    - name: Update Feeds
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Generate Configuration
+      run: |
+        cd openwrt
+        
+        # 根据设备生成默认配置
+        device="${{ github.event.inputs.device }}"
+        echo "为设备 $device 创建配置..."
+        
+        # 基础配置
+        cat > .config <<EOF
+        CONFIG_MODULES=y
+        CONFIG_HAVE_DOT_CONFIG=y
+        CONFIG_TARGET_ipq53xx=y
+        CONFIG_TARGET_ipq53xx_generic=y
+        CONFIG_TARGET_ipq53xx_generic_DEVICE_glinet_gl-be3600=y
+        CONFIG_HAS_SUBTARGETS=y
+        CONFIG_HAS_DEVICES=y
+        CONFIG_TARGET_BOARD="ipq53xx"
+        CONFIG_TARGET_SUBTARGET="generic"
+        CONFIG_TARGET_PROFILE="DEVICE_glinet_gl-be3600"
+        CONFIG_TARGET_ARCH_PACKAGES="aarch64_cortex-a53"
+        CONFIG_DEFAULT_TARGET_OPTIMIZATION="-Os -pipe -mcpu=cortex-a53"
+        CONFIG_CPU_TYPE="cortex-a53"
+        
+        # 构建类型设置
+        CONFIG_KERNEL_BUILD_USER="OpenWrt Builder"
+        CONFIG_KERNEL_BUILD_DOMAIN="GitHub Actions"
+        
+        # 基本工具和服务
+        CONFIG_PACKAGE_dnsmasq-full=y
+        CONFIG_PACKAGE_dropbear=y
+        CONFIG_PACKAGE_firewall4=y
+        CONFIG_PACKAGE_nftables=y
+        CONFIG_PACKAGE_kmod-nft-offload=y
+        
+        # 必要组件
+        CONFIG_PACKAGE_kmod-usb-core=y
+        CONFIG_PACKAGE_kmod-usb3=y
+        CONFIG_PACKAGE_kmod-usb-storage=y
+        CONFIG_PACKAGE_kmod-fs-ext4=y
+        CONFIG_PACKAGE_kmod-fs-ntfs=y
+        CONFIG_PACKAGE_block-mount=y
+        
+        # 网络工具
+        CONFIG_PACKAGE_iputils-ping=y
+        CONFIG_PACKAGE_wget-ssl=y
+        CONFIG_PACKAGE_curl=y
+        
+        # 管理界面
+        CONFIG_PACKAGE_luci=y
+        CONFIG_PACKAGE_luci-app-firewall=y
+        CONFIG_PACKAGE_luci-app-opkg=y
+        CONFIG_PACKAGE_luci-theme-bootstrap=y
+        
+        # 热门插件
+        CONFIG_PACKAGE_luci-app-ssr-plus=y
+        CONFIG_PACKAGE_luci-app-openclash=y
+        
+        # 编译细节
+        CONFIG_DEVEL=y
+        CONFIG_CCACHE=y
+        EOF
+        
+        # 应用构建类型
+        if [ "${{ github.event.inputs.build_type }}" = "开发版" ]; then
+          echo "配置为开发版构建..."
+          echo "CONFIG_ALL_KMODS=y" >> .config
+          echo "CONFIG_ALL_NONSHARED=y" >> .config
+          echo "CONFIG_DEBUG=y" >> .config
+        else
+          echo "配置为正式版构建..."
+          echo "CONFIG_AUTOREBUILD=y" >> .config
+          echo "CONFIG_REPRODUCIBLE_DEBUG_INFO=y" >> .config
+        fi
+        
+        # 生成最终配置
+        make defconfig
+        
+        # 显示设备信息
+        echo "构建目标: $(grep 'CONFIG_TARGET_PROFILE' .config | cut -d= -f2 | tr -d '"')"
+
+    - name: Download Package Sources
+      run: |
+        cd openwrt
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Build Firmware
+      id: compile
+      run: |
+        cd openwrt
+        echo "开始编译固件..."
+        
+        # 启用详细输出
+        make -j$(nproc) || make -j1 V=s
+        
+        echo "status=success" >> $GITHUB_OUTPUT
+      continue-on-error: true
+
+    - name: Check Firmware Files
+      id: check
+      run: |
+        cd openwrt
+        
+        echo "固件目录信息:"
+        find bin -type d | sort
+        
+        # 系统详细信息
+        echo "系统信息:"
+        df -h
+        
+        # 收集所有可能的固件文件
+        mkdir -p "$GITHUB_WORKSPACE/firmware"
+        
+        echo "查找所有可能的固件文件..."
+        # 查找镜像文件 (*.bin, *.img, *.trx, *.imx, *.itb)
+        find bin -type f -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.imx" -o -name "*.itb" | xargs -I {} cp -f {} "$GITHUB_WORKSPACE/firmware/" || echo "未找到镜像文件"
+        
+        # 查找指定设备的固件
+        device_pattern="*${{ github.event.inputs.device }}*"
+        find bin/targets -type f -name "$device_pattern.bin" -o -name "$device_pattern.img" -o -name "$device_pattern.trx" -o -name "$device_pattern.imx" -o -name "$device_pattern.itb" | xargs -I {} cp -f {} "$GITHUB_WORKSPACE/firmware/" || echo "未找到指定设备固件"
+        
+        # 查找通用文件名格式的固件
+        find bin/targets -name "openwrt-*.bin" -o -name "immortalwrt-*.bin" | xargs -I {} cp -f {} "$GITHUB_WORKSPACE/firmware/" || echo "未找到通用格式固件"
+        
+        # 强制复制所有bin目录下的firmware文件夹内容
+        if [ -d "bin/targets/ipq53xx/generic/packages" ]; then
+          mkdir -p "$GITHUB_WORKSPACE/firmware/packages"
+          cp -rf bin/targets/ipq53xx/generic/packages/* "$GITHUB_WORKSPACE/firmware/packages/" || echo "复制包文件失败"
+        fi
+        
+        # 尝试查找特定名称的固件文件
+        for file in $(find bin/targets -type f -name "*.buildinfo"); do
+          dir=$(dirname "$file")
+          echo "检查目录: $dir"
+          find "$dir" -maxdepth 1 -type f -name "*.bin" -o -name "*.img" -o -name "*.trx" | xargs -I {} cp -f {} "$GITHUB_WORKSPACE/firmware/" || true
+        done
+        
+        # 列出收集到的固件文件
+        echo "收集到的固件文件:"
+        ls -la "$GITHUB_WORKSPACE/firmware/"
+        
+        # 如果没有找到固件，创建一个提示文件
+        if [ -z "$(ls -A "$GITHUB_WORKSPACE/firmware/" 2>/dev/null)" ]; then
+          echo "未找到任何固件文件，创建提示文件..."
+          echo "编译过程未能生成固件文件。请检查构建日志以获取更多信息。" > "$GITHUB_WORKSPACE/firmware/build_failed.txt"
+        fi
+        
+        echo "firmware_path=$GITHUB_WORKSPACE/firmware" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+      continue-on-error: true
+
+    - name: Upload Firmware
+      uses: actions/upload-artifact@main
+      if: steps.check.outputs.status == 'success' && !cancelled()
+      with:
+        name: OpenWrt_firmware_${{ github.event.inputs.device }}_${{ github.run_id }}
+        path: ${{ env.firmware_path }}
+
+    - name: Create Release
+      id: create_release
+      uses: ncipollo/release-action@v1
+      if: steps.check.outputs.status == 'success' && !cancelled()
+      with:
+        name: OpenWrt固件 - ${{ github.event.inputs.device }} ${{ github.event.inputs.build_type }}
+        allowUpdates: true
+        tag: firmware-${{ github.event.inputs.device }}-${{ github.run_id }}
+        commit: ${{ github.sha }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        body: |
+          OpenWrt 固件 - ${{ github.event.inputs.device }}
+          构建类型: ${{ github.event.inputs.build_type }}
+          构建时间: ${{ env.TZ }} - ${{ github.event.repository.updated_at }}
+          
+          注意: 如果只发现build_failed.txt文件，说明编译过程未能生成固件。请查看工作流日志了解详细错误信息。
+        artifacts: ${{ env.firmware_path }}/*
+        artifactErrorsFailBuild: false
+      continue-on-error: true 
