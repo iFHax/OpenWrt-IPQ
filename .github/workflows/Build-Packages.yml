@@ -172,6 +172,9 @@ jobs:
         cd openwrt
         echo "开始编译指定的插件包..."
         
+        # 显示指定的包名
+        echo "尝试编译的包: ${{ github.event.inputs.package_name }}"
+        
         # 确保所有依赖都已安装
         make defconfig
         
@@ -179,6 +182,8 @@ jobs:
         echo "编译基础工具链..."
         make tools/compile -j$(nproc) || make tools/compile -j1 V=s
         make toolchain/compile -j$(nproc) || make toolchain/compile -j1 V=s
+        make target/compile -j$(nproc) || make target/compile -j1 V=s
+        make package/libs/toolchain/compile -j$(nproc) || make package/libs/toolchain/compile -j1 V=s
         
         # 创建一个问题包列表
         problem_packages="lua-neturl naiveproxy"
@@ -204,15 +209,52 @@ jobs:
             done
           fi
           
+          # 检查包是否存在
+          echo "检查包 $pkg 是否存在..."
+          if [ -d "package/feeds/kenzo/$pkg" ]; then
+            pkg_path="package/feeds/kenzo/$pkg"
+          elif [ -d "package/feeds/packages/$pkg" ]; then
+            pkg_path="package/feeds/packages/$pkg"
+          elif [ -d "package/feeds/small/$pkg" ]; then
+            pkg_path="package/feeds/small/$pkg"
+          else
+            # 查找包的确切位置
+            pkg_path=$(find package/feeds -name "$pkg" -type d | head -n 1)
+            if [ -z "$pkg_path" ]; then
+              echo "警告: 无法找到包 $pkg，尝试编译但可能失败"
+              pkg_path="package/$pkg"
+            fi
+          fi
+          
+          echo "使用路径 $pkg_path 编译 $pkg..."
+          
+          # 确保包的配置被设置为编译
+          echo "确保包被选中编译..."
+          ./scripts/feeds uninstall $pkg || true
+          ./scripts/feeds install $pkg || true
+          
+          # 更新编译菜单配置以确保包被选中
+          cat >> .config <<EOF
+          CONFIG_PACKAGE_$pkg=y
+          EOF
+          make defconfig
+          
           # 使用IGNORE_ERRORS=1尝试编译，即使有错误也继续
           echo "正在编译 $pkg，使用多线程..."
-          make package/$pkg/compile IGNORE_ERRORS=1 -j$(nproc) V=s || {
+          make $pkg_path/compile IGNORE_ERRORS=1 -j$(nproc) V=s || {
             echo "多线程编译失败，尝试使用单线程编译..."
-            make package/$pkg/compile IGNORE_ERRORS=1 -j1 V=s || {
-              echo "单线程编译也失败了，记录错误但继续..."
-              echo "$pkg 编译失败" >> /tmp/failed_packages.txt
+            make $pkg_path/compile IGNORE_ERRORS=1 -j1 V=s || {
+              echo "单线程编译也失败了，尝试直接编译包..."
+              make package/$pkg/compile IGNORE_ERRORS=1 -j1 V=s || {
+                echo "所有编译方法都失败了，记录错误但继续..."
+                echo "$pkg 编译失败" >> /tmp/failed_packages.txt
+              }
             }
           }
+          
+          # 尝试安装包
+          echo "安装 $pkg..."
+          make $pkg_path/install IGNORE_ERRORS=1 -j$(nproc) || make package/$pkg/install IGNORE_ERRORS=1 -j1 V=s || true
           
           # 检查编译是否成功
           if find bin/packages -name "*${pkg}*" -type f 2>/dev/null | grep -q .; then
@@ -220,9 +262,15 @@ jobs:
           elif find bin/targets -name "*${pkg}*" -type f 2>/dev/null | grep -q .; then
             echo "✓ $pkg 编译成功，找到对应的IPK文件"
           else
-            echo "⚠️ 警告: 未找到 $pkg 的编译输出文件"
+            echo "⚠️ 警告: 未找到 $pkg 的编译输出文件，尝试强制重新编译..."
+            # 强制构建包文件
+            make package/index V=s || true
           fi
         done
+        
+        # 生成包索引
+        echo "生成包索引..."
+        make package/index V=s || true
         
         # 显示编译失败包的列表
         if [ -f "/tmp/failed_packages.txt" ]; then
@@ -230,11 +278,8 @@ jobs:
           cat /tmp/failed_packages.txt
         fi
         
-        # 尝试安装软件包
-        for pkg in ${{ github.event.inputs.package_name }}; do
-          echo "安装 $pkg..."
-          make package/$pkg/install IGNORE_ERRORS=1 -j$(nproc) || true
-        done
+        echo "显示所有生成的IPK文件:"
+        find bin -name "*.ipk" | sort || echo "未找到任何IPK文件"
         
         echo "status=success" >> $GITHUB_OUTPUT
       continue-on-error: true
@@ -247,25 +292,49 @@ jobs:
         echo "查看编译输出目录结构..."
         find openwrt/bin -type d | sort || echo "bin目录不存在"
         
-        # 收集所有编译好的ipk文件
-        if [ -d "openwrt/bin/packages" ]; then
-          echo "复制packages目录下的IPK文件..."
-          find openwrt/bin/packages -name "*.ipk" -exec cp {} ./ipk_packages/ \; || echo "没有找到包文件"
-        else
-          echo "packages目录不存在"
+        echo "查找所有IPK文件的位置..."
+        find openwrt -name "*.ipk" | sort || echo "未找到任何IPK文件"
+        
+        # 首先查找所有可能的IPK文件并复制
+        echo "复制所有找到的IPK文件..."
+        find openwrt -name "*.ipk" -exec cp -fv {} ./ipk_packages/ \; || echo "复制IPK文件失败"
+        
+        # 特别检查常见的IPK文件位置
+        for pkg in ${{ github.event.inputs.package_name }}; do
+          echo "查找特定的包 $pkg..."
+          find openwrt -name "*${pkg}*.ipk" -exec cp -fv {} ./ipk_packages/ \; || echo "未找到 $pkg 的IPK文件"
+        done
+        
+        # 检查build_dir中是否有编译后的包
+        if [ -d "openwrt/build_dir" ]; then
+          echo "检查build_dir目录中的包..."
+          find openwrt/build_dir -name "*.ipk" -exec cp -fv {} ./ipk_packages/ \; || echo "build_dir中未找到IPK文件"
         fi
         
-        if [ -d "openwrt/bin/targets" ]; then
-          echo "复制targets目录下的IPK文件..."
-          find openwrt/bin/targets -name "*.ipk" -exec cp {} ./ipk_packages/ \; || echo "没有找到目标包文件"
-        else
-          echo "targets目录不存在"
-        fi
+        # 查找各个feeds下的编译结果
+        for feed in kenzo small packages; do
+          echo "检查 $feed feed的编译结果..."
+          find openwrt/build_dir/feeds/$feed -name "*.ipk" -exec cp -fv {} ./ipk_packages/ \; 2>/dev/null || echo "$feed feed中未找到IPK文件"
+        done
+        
+        # 强制为每个请求的包创建一个包文件夹
+        echo "为每个请求的包创建对应目录..."
+        for pkg in ${{ github.event.inputs.package_name }}; do
+          mkdir -p "./ipk_packages/${pkg}_files"
+          cp -fv openwrt/bin/packages/*/${pkg}*.ipk "./ipk_packages/${pkg}_files/" 2>/dev/null || true
+          cp -fv openwrt/bin/targets/*/*/packages/${pkg}*.ipk "./ipk_packages/${pkg}_files/" 2>/dev/null || true
+        done
         
         # 确保总有文件可以上传
         if [ ! "$(ls -A ./ipk_packages 2>/dev/null)" ]; then
           echo "未找到任何IPK文件，创建占位文件..."
           echo "No packages were built. Please check build logs for errors." > ./ipk_packages/build_failed.txt
+          
+          # 保存关键构建日志
+          echo "保存构建日志以便分析..."
+          mkdir -p ./ipk_packages/logs
+          find openwrt/logs -type f -name "*.txt" -exec cp {} ./ipk_packages/logs/ \; 2>/dev/null || true
+          find openwrt -name "*.log" -exec cp {} ./ipk_packages/logs/ \; 2>/dev/null || true
         fi
         
         echo "找到以下IPK包或文件:"
