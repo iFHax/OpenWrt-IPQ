@@ -6,15 +6,15 @@ on:
       device:
         description: '设备型号'
         required: true
-        default: 'gl-be3600'
+        default: 'arcadyan-aw1000'
       build_type:
-        description: '构建类型 (正式版/开发版)'
+        description: 'Build type (production version/development version)'
         required: true
-        default: '正式版'
+        default: 'Official version'
         type: choice
         options:
-          - 正式版
-          - 开发版
+          - Official version
+          - Development version
 
 # 权限配置
 permissions: 
