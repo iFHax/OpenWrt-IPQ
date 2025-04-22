@@ -3,7 +3,7 @@ name: AW1000-IPQ807X
 on:
   workflow_dispatch:
 
-permissions: 
+permissions:
   contents: write
 
 env:
