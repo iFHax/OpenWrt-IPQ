@@ -46,7 +46,10 @@ jobs:
         sudo timedatectl set-timezone "$TZ"
         sudo rm -rf /workdir && sudo mkdir -p /workdir && sudo chown $USER:$GROUPS /workdir
         df -Th
-
+        
+    - name: Clear cache
+      run: rm -rf ~/.cache
+      
     - name: Cache OpenWrt
       uses: actions/cache@v3
       with:
@@ -141,7 +144,7 @@ jobs:
       continue-on-error: true
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v2
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
