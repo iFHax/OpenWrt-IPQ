@@ -22,8 +22,8 @@ permissions:
   packages: read
 
 env:
-  REPO_URL: https://github.com/coolsnowwolf/lede.git
-  REPO_BRANCH: master
+  REPO_URL: https://github.com/xhikarishii/openwrt-ipq.git
+  REPO_BRANCH: aw1000-main
   TZ: Asia/Kuala_Lumpur
 
 jobs:
