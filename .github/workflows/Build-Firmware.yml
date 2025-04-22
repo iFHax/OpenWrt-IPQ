@@ -1,4 +1,4 @@
-name: Build
+name: AW1000-IPQ807X
 
 on:
   workflow_dispatch:
