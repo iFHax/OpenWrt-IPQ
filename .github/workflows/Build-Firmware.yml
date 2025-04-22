@@ -7,14 +7,14 @@ permissions:
   contents: write
 
 env:
-  REPO_URL: https://github.com/openwrt/openwrt.git
+  REPO_URL: https://github.com/coolsnowwolf/lede.git
   REPO_BRANCH: master
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_SCRIPT: diy-part.sh
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
-  TZ: Canada/Atlantic
+  TZ: Asia/Kuala_Lumpur
   FILE_NAME: AW1000-IPQ807x
 
 jobs:
